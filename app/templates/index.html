@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Willkommen!</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
+    <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ welcome_message }}</h1>
+        <p>Dies ist eine einfache Webseite, die mit FastAPI, HTMX und Jinja2 erstellt wurde.</p>
+
+        <div id="htmx-content">
+            Klicke auf den Button, um eine Nachricht mit HTMX zu laden:
+        </div>
+        <button hx-get="/htmx-message" hx-target="#htmx-content" hx-swap="innerHTML" class="btn btn-primary mt-2">
+            Nachricht laden
+        </button>
+    </div>
+</body>
+</html>
