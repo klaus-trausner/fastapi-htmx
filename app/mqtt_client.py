@@ -52,22 +52,46 @@ def on_connect(client, userdata, flags, rc):
 
 def on_message(client, userdata, msg):
     payload_str = msg.payload.decode()
-    topic = msg.topic
+    original_topic = msg.topic  # Behalte den ursprünglichen Topic für das Update-Signal
     print(
-        f"MQTT_CLIENT: Nachricht empfangen auf Topic '{topic}': {payload_str}")
+        f"MQTT_CLIENT: Nachricht empfangen auf Topic '{original_topic}': {payload_str}")
 
     # Speichere die letzte Nachricht (thread-sicher)
     with latest_messages_lock:
-        latest_messages[topic] = payload_str
+        if original_topic == "innen":
+            try:
+                parts = payload_str.split('-')
+                if len(parts) == 3:
+                    temp, humidity, pressure = parts
+                    latest_messages["indoor/temperature"] = temp
+                    latest_messages["indoor/humidity"] = humidity
+                    latest_messages["indoor/pressure"] = pressure
+                    # Entferne den ursprünglichen "innen" Topic, da er aufgeteilt wurde
+                    if "innen" in latest_messages:
+                        del latest_messages["innen"]
+                    print(
+                        f"MQTT_CLIENT: Topic 'innen' Daten '{payload_str}' verarbeitet zu indoor/temperature, indoor/humidity, indoor/pressure.")
+                else:
+                    print(
+                        f"MQTT_CLIENT: WARNUNG - 'innen' Topic Payload Formatfehler. Erwartet 3 Teile, erhalten {len(parts)}. Payload: '{payload_str}'. Speichere original.")
+                    # Speichere die Originalnachricht bei Formatfehler
+                    latest_messages[original_topic] = payload_str
+            except Exception as e:
+                print(
+                    f"MQTT_CLIENT: FEHLER - Beim Parsen des 'innen' Topic Payloads '{payload_str}': {e}. Speichere original.")
+                # Speichere die Originalnachricht bei Exception
+                latest_messages[original_topic] = payload_str
+        else:
+            latest_messages[original_topic] = payload_str
 
     # Informiere den SSE-Handler über die neue Nachricht
     if app_event_loop and update_queue:
         # print(
-        #    f"MQTT_CLIENT: Versuche Update für Topic '{topic}' in Queue zu legen. Queue size vorher: {update_queue.qsize()}")
+        #    f"MQTT_CLIENT: Versuche Update für Topic '{origina_topic}' in Queue zu legen. Queue size vorher: {update_queue.qsize()}")
         # Sende die spezifische Änderung oder einfach ein Signal.
         # Der SSE-Handler wird die kompletten 'latest_messages' neu rendern.
         asyncio.run_coroutine_threadsafe(update_queue.put(
-            {"type": "update", "topic": topic, "payload": payload_str}), app_event_loop)
+            {"type": "update", "topic": original_topic, "payload": payload_str}), app_event_loop)
 
 
 def on_disconnect(client, userdata, rc):
