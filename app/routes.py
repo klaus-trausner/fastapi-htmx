@@ -24,6 +24,41 @@ async def get_htmx_message():
     return "<p>Diese Nachricht wurde dynamisch mit HTMX geladen!</p>"
 
 
+def generate_mqtt_html(mqtt_data):
+    """
+    Generiert HTML für MQTT-Daten ohne Template-Engine-Probleme
+    """
+    if not mqtt_data:
+        return '<p>Warte auf MQTT Daten oder noch keine Daten empfangen...</p>'
+
+    html = '''
+    <table class="table" style="width:100%; border-collapse: collapse; margin-top: 15px;">
+        <thead>
+            <tr>
+                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Topic</th>
+                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Wert</th>
+            </tr>
+        </thead>
+        <tbody>
+    '''
+
+    # Sortiere die Topics für konsistente Anzeige
+    for topic, value in sorted(mqtt_data.items()):
+        html += f'''
+            <tr>
+                <td style="border: 1px solid #ddd; padding: 8px;">{topic}</td>
+                <td style="border: 1px solid #ddd; padding: 8px;">{value}</td>
+            </tr>
+        '''
+
+    html += '''
+        </tbody>
+    </table>
+    '''
+
+    return html
+
+
 async def mqtt_event_generator(request: Request):
     """
     Sendet die initialen MQTT-Daten und lauscht dann auf Updates aus der Queue.
@@ -56,9 +91,9 @@ async def mqtt_event_generator(request: Request):
                             f"SSE_GENERATOR: This occurred for update_item: {update_item}")
                     print(
                         f"SSE_GENERATOR: Verarbeite Update. latest_messages vor Render: {current_data}")
-                    html_fragment = templates.get_template("partials/mqtt_data_display.html").render(
-                        request=request, mqtt_data=current_data
-                    )
+
+                    # NEUE METHODE: Direktes HTML-Rendering ohne Template-Engine-Probleme
+                    html_fragment = generate_mqtt_html(current_data)
 
                     fragment_length = len(html_fragment)
                     fragment_preview = html_fragment.strip()[:500]
@@ -69,7 +104,9 @@ async def mqtt_event_generator(request: Request):
                         print(
                             "SSE_GENERATOR: WARNUNG! Gerendertes HTML Fragment ist leer oder nur Whitespace!")
 
-                    yield f"data: {html_fragment}\n\n"
+                    # WICHTIGE ÄNDERUNG: Benanntes Event statt nur 'data:'
+                    # Das Event muss mit sse-swap="message" übereinstimmen
+                    yield f"event: message\ndata: {html_fragment}\n\n"
                     mqtt_client.update_queue.task_done()
 
             except asyncio.TimeoutError:

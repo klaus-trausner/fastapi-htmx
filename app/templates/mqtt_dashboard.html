@@ -11,12 +11,24 @@
 <body>
     <div class="container">
         <h1>MQTT Echtzeitdaten</h1>
+        
+        <!-- Debug Info -->
+        <div id="debug-info" style="background: #f0f0f0; padding: 10px; margin: 10px 0; font-family: monospace;">
+            <strong>Debug Info:</strong><br>
+            SSE Status: <span id="sse-status">Connecting...</span><br>
+            Last Update: <span id="last-update">-</span><br>
+            Updates Count: <span id="update-count">0</span>
+        </div>
+
         <div id="mqtt-data-container"
              hx-ext="sse"
              sse-connect="/events/mqtt-updates"
              sse-swap="message"
              hx-swap="innerHTML"
-             hx-on::after-swap="console.log('HTMX afterSwap event on mqtt-data-container. Timestamp:', new Date().toISOString(), 'Swapped innerHTML (first 100 chars):', this.innerHTML.substring(0, 100))">
+             hx-on::after-swap="handleAfterSwap(this)"
+             hx-on::sse-open="handleSSEOpen()"
+             hx-on::sse-error="handleSSEError(event)"
+             hx-on::sse-close="handleSSEClose()">
             <!-- Initialer Inhalt wird hier vom Server gerendert -->
             {% with mqtt_data = initial_mqtt_data %}
                 {% include 'partials/mqtt_data_display.html' %}
@@ -25,5 +37,34 @@
         <hr>
         <p><a href="{{ url_for('read_root') }}">Zurück zur Willkommensseite</a></p>
     </div>
+
+    <script>
+        // Debug-Funktionen
+        let updateCount = 0;
+        
+        function handleAfterSwap(element) {
+            updateCount++;
+            document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+            document.getElementById('update-count').textContent = updateCount;
+            document.getElementById('sse-status').textContent = 'Connected & Updating';
+            console.log('HTMX afterSwap event on mqtt-data-container. Timestamp:', new Date().toISOString(), 
+                       'Swapped innerHTML (first 100 chars):', element.innerHTML.substring(0, 100));
+        }
+        
+        function handleSSEOpen() {
+            document.getElementById('sse-status').textContent = 'Connected';
+            console.log('SSE connection opened');
+        }
+        
+        function handleSSEError(event) {
+            document.getElementById('sse-status').textContent = 'Error';
+            console.error('SSE error:', event);
+        }
+        
+        function handleSSEClose() {
+            document.getElementById('sse-status').textContent = 'Disconnected';
+            console.log('SSE connection closed');
+        }
+    </script>
 </body>
 </html>
