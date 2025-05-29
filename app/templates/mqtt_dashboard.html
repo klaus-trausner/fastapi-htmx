@@ -5,66 +5,150 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MQTT Dashboard</title>
     <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
-    <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
-    <script src="https://unpkg.com/htmx-ext-sse@2.2.3" integrity="sha384-Y4gc0CK6Kg+hmulDc6rZPJu0tqvk7EWlih0Oh+2OkAi1ZDlCbBDCQEE2uVk472Ky" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
 </head>
 <body>
     <div class="container">
         <h1>MQTT Echtzeitdaten</h1>
         
-        <!-- Debug Info -->
-        <div id="debug-info" style="background: #f0f0f0; padding: 10px; margin: 10px 0; font-family: monospace;">
+        <!-- Erweiterte Debug Info -->
+        <div id="debug-info" style="background: #f0f0f0; padding: 10px; margin: 10px 0; font-family: monospace; font-size: 12px;">
             <strong>Debug Info:</strong><br>
             SSE Status: <span id="sse-status">Connecting...</span><br>
             Last Update: <span id="last-update">-</span><br>
-            Updates Count: <span id="update-count">0</span>
+            Updates Count: <span id="update-count">0</span><br>
+            Data Length: <span id="data-length">0</span><br>
+            Last Event Type: <span id="last-event-type">-</span><br>
+            HTMX Settling: <span id="htmx-settling">false</span>
         </div>
+
+        <!-- Test Button für manuellen Refresh -->
+        <button onclick="testManualUpdate()" style="margin-bottom: 10px;">Manual Test Update</button>
 
         <div id="mqtt-data-container"
              hx-ext="sse"
              sse-connect="/events/mqtt-updates"
              sse-swap="message"
-             hx-swap="innerHTML"
-             hx-on::after-swap="handleAfterSwap(this)"
-             hx-on::sse-open="handleSSEOpen()"
-             hx-on::sse-error="handleSSEError(event)"
-             hx-on::sse-close="handleSSEClose()">
-            <!-- Initialer Inhalt wird hier vom Server gerendert -->
-            {% with mqtt_data = initial_mqtt_data %}
-                {% include 'partials/mqtt_data_display.html' %}
-            {% endwith %}
+             hx-swap="innerHTML settle:100ms">
+            <!-- Initialer Inhalt -->
+            {% if initial_mqtt_data %}
+                <table class="table" style="width:100%; border-collapse: collapse; margin-top: 15px;">
+                    <thead>
+                        <tr>
+                            <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Topic</th>
+                            <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Wert</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for topic, value in initial_mqtt_data.items()|sort %}
+                        <tr>
+                            <td style="border: 1px solid #ddd; padding: 8px;">{{ topic }}</td>
+                            <td style="border: 1px solid #ddd; padding: 8px;">{{ value }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p>Warte auf MQTT Daten oder noch keine Daten empfangen...</p>
+            {% endif %}
         </div>
+        
         <hr>
         <p><a href="{{ url_for('read_root') }}">Zurück zur Willkommensseite</a></p>
+        <p><a href="/debug/mqtt-html" target="_blank">Debug: Aktuelle MQTT HTML anzeigen</a></p>
     </div>
 
     <script>
-        // Debug-Funktionen
         let updateCount = 0;
         
-        function handleAfterSwap(element) {
+        // Alle HTMX Events loggen
+        document.addEventListener('htmx:sseMessage', function(event) {
+            console.log('=== SSE Message Event ===');
+            console.log('Event:', event);
+            console.log('Detail:', event.detail);
+            console.log('Data preview:', event.detail.data ? event.detail.data.substring(0, 300) : 'NO DATA');
+            console.log('Target:', event.target);
+            console.log('Target classes:', event.target.className);
+            
             updateCount++;
             document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
             document.getElementById('update-count').textContent = updateCount;
-            document.getElementById('sse-status').textContent = 'Connected & Updating';
-            console.log('HTMX afterSwap event on mqtt-data-container. Timestamp:', new Date().toISOString(), 
-                       'Swapped innerHTML (first 100 chars):', element.innerHTML.substring(0, 100));
-        }
+            document.getElementById('sse-status').textContent = 'Message Received';
+            document.getElementById('last-event-type').textContent = 'sseMessage';
+            
+            if (event.detail && event.detail.data) {
+                document.getElementById('data-length').textContent = event.detail.data.length;
+            }
+            
+            // Prüfe ob Element gerade settling ist
+            document.getElementById('htmx-settling').textContent = 
+                event.target.classList.contains('htmx-settling') ? 'true' : 'false';
+        });
         
-        function handleSSEOpen() {
+        document.addEventListener('htmx:sseOpen', function(event) {
+            console.log('SSE connection opened:', event);
             document.getElementById('sse-status').textContent = 'Connected';
-            console.log('SSE connection opened');
-        }
+            document.getElementById('last-event-type').textContent = 'sseOpen';
+        });
         
-        function handleSSEError(event) {
-            document.getElementById('sse-status').textContent = 'Error';
+        document.addEventListener('htmx:sseError', function(event) {
             console.error('SSE error:', event);
+            document.getElementById('sse-status').textContent = 'Error';
+            document.getElementById('last-event-type').textContent = 'sseError';
+        });
+        
+        document.addEventListener('htmx:sseClose', function(event) {
+            console.log('SSE connection closed:', event);
+            document.getElementById('sse-status').textContent = 'Disconnected';
+            document.getElementById('last-event-type').textContent = 'sseClose';
+        });
+
+        // HTMX Swap Events
+        document.addEventListener('htmx:beforeSwap', function(event) {
+            if (event.target.id === 'mqtt-data-container') {
+                console.log('=== Before Swap ===');
+                console.log('Event:', event);
+                console.log('Target:', event.target);
+                console.log('Detail:', event.detail);
+                console.log('Response text preview:', event.detail.xhr ? 
+                    event.detail.xhr.responseText?.substring(0, 200) : 'NO RESPONSE');
+            }
+        });
+
+        document.addEventListener('htmx:afterSwap', function(event) {
+            if (event.target.id === 'mqtt-data-container') {
+                console.log('=== After Swap ===');
+                console.log('Target innerHTML preview:', event.target.innerHTML.substring(0, 200));
+                document.getElementById('sse-status').textContent = 'Swapped';
+            }
+        });
+
+        document.addEventListener('htmx:swapError', function(event) {
+            if (event.target.id === 'mqtt-data-container') {
+                console.error('=== Swap Error ===');
+                console.error('Event:', event);
+                document.getElementById('sse-status').textContent = 'Swap Error';
+            }
+        });
+
+        // Test-Funktion für manuellen Update
+        function testManualUpdate() {
+            fetch('/debug/mqtt-html')
+                .then(response => response.text())
+                .then(html => {
+                    console.log('Manual update HTML:', html.substring(0, 200));
+                    document.getElementById('mqtt-data-container').innerHTML = html;
+                })
+                .catch(error => console.error('Manual update error:', error));
         }
         
-        function handleSSEClose() {
-            document.getElementById('sse-status').textContent = 'Disconnected';
-            console.log('SSE connection closed');
-        }
+        // Zusätzliches Debugging für settling
+        setInterval(() => {
+            const container = document.getElementById('mqtt-data-container');
+            const isSettling = container.classList.contains('htmx-settling');
+            document.getElementById('htmx-settling').textContent = isSettling ? 'true' : 'false';
+        }, 1000);
     </script>
 </body>
 </html>

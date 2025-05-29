@@ -2,8 +2,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 import asyncio
-import traceback  # Import für detailliertere Fehlerausgaben
-from app import mqtt_client  # Zugriff auf Queue und latest_messages
+import traceback
+import json
+from app import mqtt_client
 
 router = APIRouter()
 
@@ -19,139 +20,161 @@ async def read_root(request: Request):
 
 @router.get("/htmx-message", response_class=HTMLResponse)
 async def get_htmx_message():
-    # Dieser Endpunkt wird von HTMX aufgerufen
-    # Du kannst hier komplexere Logik oder Datenbankabfragen einbauen
     return "<p>Diese Nachricht wurde dynamisch mit HTMX geladen!</p>"
 
 
 def generate_mqtt_html(mqtt_data):
     """
-    Generiert HTML für MQTT-Daten ohne Template-Engine-Probleme
+    Generiert HTML für MQTT-Daten
     """
     if not mqtt_data:
         return '<p>Warte auf MQTT Daten oder noch keine Daten empfangen...</p>'
 
-    html = '''
-    <table class="table" style="width:100%; border-collapse: collapse; margin-top: 15px;">
-        <thead>
-            <tr>
-                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Topic</th>
-                <th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Wert</th>
-            </tr>
-        </thead>
-        <tbody>
-    '''
+    html_parts = [
+        '<table class="table" style="width:100%; border-collapse: collapse; margin-top: 15px;">',
+        '<thead>',
+        '<tr>',
+        '<th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Topic</th>',
+        '<th style="border: 1px solid #ddd; padding: 8px; text-align: left; background-color: #f2f2f2;">Wert</th>',
+        '</tr>',
+        '</thead>',
+        '<tbody>'
+    ]
 
     # Sortiere die Topics für konsistente Anzeige
     for topic, value in sorted(mqtt_data.items()):
-        html += f'''
-            <tr>
-                <td style="border: 1px solid #ddd; padding: 8px;">{topic}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{value}</td>
-            </tr>
-        '''
+        # Escape HTML-spezielle Zeichen
+        topic_escaped = str(topic).replace('&', '&amp;').replace(
+            '<', '&lt;').replace('>', '&gt;')
+        value_escaped = str(value).replace('&', '&amp;').replace(
+            '<', '&lt;').replace('>', '&gt;')
 
-    html += '''
-        </tbody>
-    </table>
-    '''
+        html_parts.extend([
+            '<tr>',
+            f'<td style="border: 1px solid #ddd; padding: 8px;">{topic_escaped}</td>',
+            f'<td style="border: 1px solid #ddd; padding: 8px;">{value_escaped}</td>',
+            '</tr>'
+        ])
 
-    return html
+    html_parts.extend([
+        '</tbody>',
+        '</table>'
+    ])
+
+    return ''.join(html_parts)
 
 
 async def mqtt_event_generator(request: Request):
     """
-    Sendet die initialen MQTT-Daten und lauscht dann auf Updates aus der Queue.
-    Sendet bei jedem Update das komplette Set an MQTT-Daten neu.
+    SSE Event Generator für MQTT Updates
     """
     print("SSE_GENERATOR: Starting event generator.")
     client_disconnected = False
+
     try:
-        print("SSE_GENERATOR: Waiting for first MQTT update to send via SSE.")
-
-        while not client_disconnected:  # Schleife läuft, bis Client die Verbindung trennt oder ein Fehler auftritt
+        while not client_disconnected:
             try:
-                # Warte auf ein Update-Signal aus der MQTT-Client-Queue
-                # Ein Timeout hilft, die Verbindung offen zu halten (Keep-Alive)
-                print(
-                    f"SSE_GENERATOR: Warte auf Item aus Queue. Aktuelle Queue size: {mqtt_client.update_queue.qsize()}")
+                # print(
+                #    f"SSE_GENERATOR: Warte auf Item aus Queue. Queue size: {mqtt_client.update_queue.qsize()}")
                 update_item = await asyncio.wait_for(mqtt_client.update_queue.get(), timeout=25.0)
-                print(f"SSE_GENERATOR: Item aus Queue erhalten: {update_item}")
+                # print(f"SSE_GENERATOR: Item aus Queue erhalten: {update_item}")
 
-                if update_item:  # Wenn ein Item (kein Timeout) empfangen wurde
+                if update_item:
+                    # Sichere Kopie der aktuellen MQTT-Daten
                     with mqtt_client.latest_messages_lock:
                         current_data = mqtt_client.latest_messages.copy()
-                    # Log des empfangenen Items
-                    print(
-                        f"SSE_GENERATOR: Processing update_item from queue: {update_item}")
+
+                    # print(f"SSE_GENERATOR: Current MQTT data: {current_data}")
+
                     if not current_data:
-                        print(
-                            "SSE_GENERATOR: CRITICAL WARNING! current_data is EMPTY before rendering. latest_messages was empty at copy time.")
-                        print(
-                            f"SSE_GENERATOR: This occurred for update_item: {update_item}")
-                    print(
-                        f"SSE_GENERATOR: Verarbeite Update. latest_messages vor Render: {current_data}")
+                        print("SSE_GENERATOR: WARNUNG! Keine MQTT-Daten verfügbar.")
+                        html_fragment = '<p>Keine MQTT-Daten verfügbar</p>'
+                    else:
+                        html_fragment = generate_mqtt_html(current_data)
 
-                    # NEUE METHODE: Direktes HTML-Rendering ohne Template-Engine-Probleme
-                    html_fragment = generate_mqtt_html(current_data)
+                    # print(
+                    #    f"SSE_GENERATOR: HTML Fragment Länge: {len(html_fragment)}")
+                    # print(
+                    #    f"SSE_GENERATOR: HTML Preview: {html_fragment[:200]}...")
 
-                    fragment_length = len(html_fragment)
-                    fragment_preview = html_fragment.strip()[:500]
-                    print(
-                        f"SSE_GENERATOR: Gerendertes HTML Fragment (Länge: {fragment_length}): '{fragment_preview}...'")
+                    # WICHTIG: SSE-Format muss exakt stimmen
+                    # Keine Leerzeichen nach dem Doppelpunkt, \n\n am Ende
+                    sse_data = f"event: message\ndata: {html_fragment}\n\n"
 
-                    if not html_fragment.strip():
-                        print(
-                            "SSE_GENERATOR: WARNUNG! Gerendertes HTML Fragment ist leer oder nur Whitespace!")
+                    # print(
+                    #   f"SSE_GENERATOR: Sende SSE Event (erste 100 Zeichen): {sse_data[:100]}...")
+                    yield sse_data
 
-                    # WICHTIGE ÄNDERUNG: Benanntes Event statt nur 'data:'
-                    # Das Event muss mit sse-swap="message" übereinstimmen
-                    yield f"event: message\ndata: {html_fragment}\n\n"
                     mqtt_client.update_queue.task_done()
 
             except asyncio.TimeoutError:
-                print("SSE_GENERATOR: Timeout in Queue.get(), sende SSE Keep-Alive.")
-                yield ": sse keep-alive\n\n"
+                print("SSE_GENERATOR: Timeout, sende Keep-Alive")
+                yield ": keep-alive\n\n"
+
             except asyncio.CancelledError:
-                # Dieser Fehler tritt auf, wenn der Client die Verbindung schließt
-                # oder die Aufgabe von außen abgebrochen wird.
-                print(
-                    "SSE_GENERATOR: Task cancelled (likely client disconnected or server shutdown).")
-                client_disconnected = True  # Signalisiert das Verlassen der äußeren Schleife
-                raise  # Erneut auslösen, damit der äußere try/except es fangen kann
-            except Exception as e_inner:
-                print(
-                    f"SSE_GENERATOR: Fehler während der Event-Verarbeitung in der Schleife: {e_inner}")
+                print("SSE_GENERATOR: Task cancelled")
+                client_disconnected = True
+                raise
+
+            except Exception as e:
+                print(f"SSE_GENERATOR: Fehler in Event-Schleife: {e}")
                 traceback.print_exc()
-                print(
-                    "SSE_GENERATOR: Breche Event-Schleife aufgrund eines internen Fehlers ab.")
-                client_disconnected = True  # Signalisiert das Verlassen der äußeren Schleife
+                client_disconnected = True
                 break
 
     except asyncio.CancelledError:
-        # Wird gefangen, wenn die Aufgabe explizit abgebrochen wird (z.B. Client disconnect)
-        print("SSE_GENERATOR: Event generator task was explicitly cancelled.")
-    except Exception as e_outer:
-        # Fängt andere unerwartete Fehler im Generator
-        print(
-            f"SSE_GENERATOR: Unerwarteter Fehler im äußeren Bereich des Event-Generators: {e_outer}")
+        print("SSE_GENERATOR: Event generator cancelled")
+    except Exception as e:
+        print(f"SSE_GENERATOR: Unerwarteter Fehler: {e}")
         traceback.print_exc()
     finally:
-        # Wird immer ausgeführt, egal ob ein Fehler auftrat oder nicht
-        print("SSE_GENERATOR: Exiting event generator function.")
+        print("SSE_GENERATOR: Generator beendet")
 
 
-@router.get("/events/mqtt-updates", response_class=StreamingResponse)
+@router.get("/events/mqtt-updates")
 async def stream_mqtt_updates(request: Request):
-    return StreamingResponse(mqtt_event_generator(request), media_type="text/event-stream")
+    """
+    SSE Endpoint für MQTT Updates
+    """
+    response = StreamingResponse(
+        mqtt_event_generator(request),
+        media_type="text/event-stream"
+    )
+
+    # Kritische SSE Headers
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["Connection"] = "keep-alive"
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Cache-Control"
+    # Nginx buffering deaktivieren
+    response.headers["X-Accel-Buffering"] = "no"
+
+    return response
 
 
 @router.get("/mqtt-dashboard", response_class=HTMLResponse, name="mqtt_dashboard")
 async def mqtt_dashboard_page(request: Request):
-    # Übergib die aktuell bekannten MQTT-Daten für die initiale Anzeige
-    initial_data_for_page = mqtt_client.latest_messages.copy()
-    print(
-        f"MQTT_DASHBOARD_PAGE: Rendering initial page. initial_mqtt_data is: {initial_data_for_page}")
+    """
+    MQTT Dashboard Seite
+    """
+    with mqtt_client.latest_messages_lock:
+        initial_data_for_page = mqtt_client.latest_messages.copy()
+
+    print(f"MQTT_DASHBOARD_PAGE: Initial data: {initial_data_for_page}")
+
     return templates.TemplateResponse(
-        request=request, name="mqtt_dashboard.html", context={"initial_mqtt_data": initial_data_for_page}
+        request=request,
+        name="mqtt_dashboard.html",
+        context={"initial_mqtt_data": initial_data_for_page}
     )
+
+
+# Debug-Endpoint zum Testen der HTML-Generierung
+@router.get("/debug/mqtt-html", response_class=HTMLResponse)
+async def debug_mqtt_html():
+    """Debug-Endpoint um die HTML-Generierung zu testen"""
+    with mqtt_client.latest_messages_lock:
+        current_data = mqtt_client.latest_messages.copy()
+
+    html = generate_mqtt_html(current_data)
+    return HTMLResponse(content=html)

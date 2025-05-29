@@ -62,8 +62,8 @@ def on_message(client, userdata, msg):
 
     # Informiere den SSE-Handler über die neue Nachricht
     if app_event_loop and update_queue:
-        print(
-            f"MQTT_CLIENT: Versuche Update für Topic '{topic}' in Queue zu legen. Queue size vorher: {update_queue.qsize()}")
+        # print(
+        #    f"MQTT_CLIENT: Versuche Update für Topic '{topic}' in Queue zu legen. Queue size vorher: {update_queue.qsize()}")
         # Sende die spezifische Änderung oder einfach ein Signal.
         # Der SSE-Handler wird die kompletten 'latest_messages' neu rendern.
         asyncio.run_coroutine_threadsafe(update_queue.put(
