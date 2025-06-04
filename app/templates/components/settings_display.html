@@ -1,0 +1,57 @@
+{# Dieses Template wird sowohl beim initialen Laden als auch per SSE-Update verwendet #}
+{% set esp_settings_map_labels = {
+    "intBodenfeuchte": "Intervall Bodenfeuchte (Sek.)",
+    "timer_h_1": "Timer 1 Stunden",
+    "timer_h_2": "Timer 2 Stunden",
+    "timer_m_1": "Timer 1 Minuten",
+    "timer_m_2": "Timer 2 Minuten",
+    "timer_int_1": "Timer 1 Intervall (Tage)",
+    "timer_int_2": "Timer 2 Intervall (Tage)",
+    "step_1": "Schritt 1 Position",
+    "step_2": "Schritt 2 Position",
+    "step_3": "Schritt 3 Position",
+    "anzOeffnung": "Anzahl Öffnungen",
+    "intOeffnung": "Intervall Öffnung (Sek.)",
+    "messInterval": "Messintervall (Min.)",
+    "reStarts": "Neustarts"
+} %}
+
+<style>
+    .status-message {
+        font-size: 0.8em;
+        margin-left: 10px;
+    }
+    .status-message.success {
+        color: green;
+    }
+    .status-message.error {
+        color: red;
+    }
+    input[type="text"], input[type="number"] {
+        width: 60px;
+        margin-right: 5px;
+    }
+</style>
+
+{% for key, label in esp_settings_map_labels.items() %}
+<div>
+    <p>
+        {{ label }}:
+        {# Zeige den aktuellen Wert an, aber auch ein Eingabefeld #}
+        <strong id="current_value_{{ key }}">{{ settings_data.get("setting_" + key, "N/A") }}</strong>
+        <input type="number" name="new_value_{{ key }}" value="{{ settings_data.get('setting_' + key, '') }}">
+        <button hx-post="/htmx/change_esp_setting"
+                hx-vals='js:{ parameter_name: "{{ key }}", new_value: document.querySelector("input[name=new_value_{{ key }}]").value }'
+                hx-target="#status_{{ key }}"
+                hx-swap="innerHTML">
+            Ändern
+        </button>
+        <span id="status_{{ key }}" class="status-message"></span>
+    </p>
+</div>
+{% endfor %}
+
+<div>
+    <p><i>Letzte Rohdaten von 'send_settings' (Payload): {{ settings_data.get("send_settings_payload", "Nie empfangen") }}</i></p>
+    
+</div>
