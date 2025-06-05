@@ -1,0 +1,22 @@
+<table class="table">
+    <thead>
+        <tr>
+            <th>Topic</th>
+            <th>Wert</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% if mqtt_data %}
+            {% for topic, value in mqtt_data.items()|sort %}
+            <tr>
+                <td>{{ topic }}</td>
+                <td>{{ value }}</td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr>
+                <td colspan="2">Warte auf MQTT Daten oder noch keine Daten empfangen...</td>
+            </tr>
+        {% endif %}
+    </tbody>
+</table>

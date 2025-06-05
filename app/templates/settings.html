@@ -1,27 +1,43 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="UTF-8">
-    <title>ESP32 Einstellungen</title>
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <!-- Fügen Sie hier ggf. Ihre CSS-Datei hinzu -->
-    <!-- <link rel="stylesheet" href="/static/style.css"> -->
+{% extends "base.html" %}
+
+{% block title %}ESP32 Einstellungen{% endblock %}
+
+{% block head_extra %}
     <style>
-        body { font-family: sans-serif; margin: 20px; }
-        h1 { color: #333; }
-        div > p { margin-bottom: 10px; padding: 8px; border-bottom: 1px solid #eee; }
-        span { font-weight: bold; color: #007bff; margin-right: 10px; }
-        button { padding: 5px 10px; margin-left: 15px; cursor: pointer; }
-        small { color: #777; }
+        /* Stile spezifisch für settings.html oder Überschreibungen */
+        /* Diese Stile waren ursprünglich in settings.html.
+           Einige könnten besser in settings_display.html oder einer globalen CSS-Datei aufgehoben sein.
+           Vorerst behalten wir sie hier für seitenspezifisches Styling.
+           Die Selektoren wurden präzisiert, um nur Elemente innerhalb von #settings-display-area zu beeinflussen. */
+        #settings-display-area div > p {
+            margin-bottom: 10px;
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+        }
+        #settings-display-area span {
+            font-weight: bold;
+            color: #007bff;
+            margin-right: 10px;
+        }
+        #settings-display-area button {
+            padding: 5px 10px;
+            margin-left: 15px;
+            cursor: pointer;
+        }
+        #settings-display-area small {
+            color: #777;
+        }
     </style>
-</head>
-<body>
+{% endblock %}
+{% block content %}
     <h1>ESP32 Einstellungen</h1>
 
     <div id="settings-display-area" hx-sse="connect:/sse event:settings_update swap:innerHTML">
         {% include 'components/settings_display.html'%}
     </div>
+{% endblock %}
 
+{% block scripts_body_end %}
     <script>
         // Optional: Konsolenausgabe bei SSE-Nachrichten für Debugging
         // document.body.addEventListener('htmx:sseMessage', function(evt) {
@@ -32,5 +48,4 @@
         //     }
         // });
     </script>
-</body>
-</html>
+{% endblock %}

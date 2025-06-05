@@ -2,24 +2,27 @@ import asyncio
 from fastapi import FastAPI, Request, HTTPException, Form
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles  # Importieren Sie StaticFiles
-# Make sure sse_starlette is installed
+from fastapi.staticfiles import StaticFiles
+import html  # Importiere das html Modul für escaping
 from sse_starlette.sse import EventSourceResponse
 
 from app import mqtt_client  # Ihre mqtt_client.py Datei
 
 app = FastAPI()
 
+# Shared variable to hold the latest message HTML fragment for the index page
+latest_message_html_fragment = ""
+
 # Stellen Sie sicher, dass der Pfad zu Ihren Templates korrekt ist
 templates = Jinja2Templates(directory="app/templates")
 
-# MQTT Client starten (normalerweise beim Anwendungsstart)
+# MQTT Client starten
 
 
 @app.on_event("startup")
 async def startup_event():
-    # Den asyncio Event Loop an den MQTT Client übergeben
     mqtt_client.app_event_loop = asyncio.get_running_loop()
+    print("Starting MQTT client...")
     mqtt_client.start_mqtt_client()
     print("FastAPI App gestartet und MQTT Client initialisiert.")
 
@@ -29,46 +32,48 @@ def shutdown_event():
     mqtt_client.stop_mqtt_client()
     print("FastAPI App heruntergefahren und MQTT Client gestoppt.")
 
-# Beispiel für eine Index-Seite
+# Index-Seite
 
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     # Diese Route ist nur ein Beispiel, passen Sie sie an Ihre Bedürfnisse an
+    # Für die Index-Seite könnten Sie eine Auswahl der neuesten Nachrichten anzeigen
+    # oder einfach eine Willkommensseite.
+    # Hier verwenden wir latest_messages als Beispiel, wie im Original.
     with mqtt_client.latest_messages_lock:
         current_data = mqtt_client.latest_messages.copy()
     return templates.TemplateResponse("index.html", {"request": request, "latest_messages": current_data})
 
-# --- NEUE ROUTE FÜR EINSTELLUNGEN ---
+# --- SETTINGS SEITE (GET) ---
 
 
-# --- NEUE ROUTE FÜR EINSTELLUNGEN (GET) ---
 @app.get("/settings", response_class=HTMLResponse)
 async def get_settings_page(request: Request):
+    # Fordert die aktuellen Einstellungen vom ESP32 an
     mqtt_client.publish_message("settings", "REQUEST_SETTINGS")
     print("MQTT-Nachricht an Topic 'settings' gesendet, um ESP32-Einstellungen anzufordern.")
+    # Zeigt die zuletzt bekannten Einstellungen an, bis ein Update via SSE kommt.
+    # Annahme: Settings sind Teil von latest_messages, und der ESP sendet sie nach REQUEST_SETTINGS.
+
     with mqtt_client.latest_messages_lock:
+        # Annahme: Settings sind Teil von latest_messages
         current_settings_data = mqtt_client.latest_messages.copy()
     return templates.TemplateResponse("settings.html", {
         "request": request,
         "settings_data": current_settings_data
     })
-# --- ENDE NEUE ROUTE ---
 
-# --- NEUE ROUTE ZUM ÄNDERN VON EINSTELLUNGEN (POST via HTMX) ---
+# --- EINSTELLUNGEN ÄNDERN (POST via HTMX) ---
 
 
 @app.post("/htmx/change_esp_setting", response_class=HTMLResponse)
 async def htmx_change_esp_setting_route(
-    request: Request,  # Request-Objekt kann nützlich sein, ist hier aber nicht zwingend
+    request: Request,
     parameter_name: str = Form(...),
     new_value: str = Form(...)
 ):
     topic = "changeSetting"
-    # Das Format ist: ["parameterName"],["newValue"]
-    # Wichtig: Die Anführungszeichen im JSON-String müssen korrekt escaped werden,
-    # oder man verwendet f-strings sorgfältig.
-    # Die Werte selbst (parameter_name, new_value) sollten als Strings im JSON sein.
     message = f'["{parameter_name}"],["{new_value}"]'
 
     print(f"FastAPI: Empfangene Einstellungsänderung via HTMX:")
@@ -79,71 +84,297 @@ async def htmx_change_esp_setting_route(
     success = mqtt_client.publish_message(topic, message)
     print(f"FastAPI: MQTT Nachricht gesendet: {success}")
 
-    if success is None:
-        # Die Rückgabe ist ein HTML-Fragment, das von HTMX in das target geladen wird
-        return HTMLResponse(f"<span class='status-message success'>Gesendet!</span>")
+    # Die Rückgabe ist ein HTML-Fragment, das von HTMX in das target geladen wird
+    # Normalerweise würde man hier das aktualisierte Fragment zurückgeben oder eine Erfolgs-/Fehlermeldung.
+    # Der ESP32 sendet die neuen Settings dann via MQTT, was per SSE die Anzeige aktualisiert.
+    # Daher reicht hier eine einfache Bestätigung.
+    if success is None or success is True:  # Annahme: publish_message gibt None oder True bei Erfolg zurück
+        return HTMLResponse(f"<span class='status-message success'>Änderung gesendet! Warte auf Bestätigung...</span>")
     else:
-        return HTMLResponse(f"<span class='status-message error'>Fehler beim Senden!</span>")
-# --- ENDE NEUE ROUTE ---
+        return HTMLResponse(f"<span class='status-message error'>Fehler beim Senden der Änderung!</span>")
+
+# --- MQTT DASHBOARD SEITE (GET) ---
 
 
-# SSE Endpoint für Live-Updates
-@app.get("/sse")
-async def sse_stream(request: Request):
-    async def event_generator():
-        # ... (Ihr bestehender SSE Code)
-        # Stellen Sie sicher, dass dieser Teil unverändert bleibt oder korrekt funktioniert
-        queue = asyncio.Queue()
-        last_update_type = None
-        last_update_topic = None
-        last_update_payload = None
+@app.get("/mqtt-dashboard", response_class=HTMLResponse)
+async def mqtt_dashboard_page(request: Request):
+    """Renders the MQTT dashboard page."""
+    with mqtt_client.latest_messages_lock:
+        initial_mqtt_data = mqtt_client.latest_messages.copy()
+    return templates.TemplateResponse(
+        "mqtt_dashboard.html",
+        {"request": request, "initial_mqtt_data": initial_mqtt_data}
+    )
 
-        while True:
-            try:
-                update = await asyncio.wait_for(mqtt_client.update_queue.get(), timeout=300)
-                update_type = update.get("type")
-                update_topic = update.get("topic")
-                update_payload = update.get("payload")
+# --- SSE GENERATOR FÜR MQTT DASHBOARD ---
 
-                if (update_type == last_update_type and
-                    update_topic == last_update_topic and
-                        update_payload == last_update_payload):
+
+async def mqtt_dashboard_event_generator(request: Request):
+    """
+    Generiert SSE-Events für MQTT-Datenupdates für das Dashboard.
+    Liest von mqtt_client.update_queue.
+    """
+    # Variablen zur Vermeidung doppelter Verarbeitung durch diesen spezifischen Generator
+    global latest_message_html_fragment  # Access the shared variable
+    last_processed_update_content_for_dashboard = None
+
+    while True:
+        if await request.is_disconnected():
+            print("Client disconnected from MQTT Dashboard SSE")
+            break
+
+        # Um sicherzustellen, dass task_done nur aufgerufen wird, wenn ein Element geholt wurde
+        raw_update = None
+        try:
+            # Timeout für Keep-Alive
+            raw_update = await asyncio.wait_for(mqtt_client.update_queue.get(), timeout=30)
+
+            update_type = raw_update.get("type")
+            update_topic = raw_update.get("topic")
+            update_payload = raw_update.get("payload")
+
+            # Erstelle einen eindeutigen Bezeichner für den Inhalt des Updates
+            current_update_content = (
+                update_type, update_topic, update_payload)
+
+            # Verarbeite nur, wenn sich der Inhalt seit dem letzten Mal geändert hat (für diesen Generator)
+            if current_update_content == last_processed_update_content_for_dashboard:
+                mqtt_client.update_queue.task_done()
+                # Zurücksetzen, da verarbeitet (oder eher ignoriert als Duplikat)
+                raw_update = None
+                continue
+
+            last_processed_update_content_for_dashboard = current_update_content
+
+            # Das Dashboard soll alle Änderungen in `latest_messages` widerspiegeln.
+            # Wir rendern die Tabelle neu, wenn ein beliebiges Update aus der Queue kommt,
+            # das nicht explizit nur für die Settings-Seite gedacht ist (obwohl die Konkurrenz um die Queue bleibt).
+            # Eine einfachere Annahme: Jedes Update in der Queue könnte für das Dashboard relevant sein.
+
+            print(f"MQTT Dashboard SSE: Update aus Queue: {raw_update}")
+            with mqtt_client.latest_messages_lock:
+                current_mqtt_data = mqtt_client.latest_messages.copy()
+
+            html_fragment = templates.get_template("components/mqtt_table.html").render({
+                "request": request,
+                "mqtt_data": current_mqtt_data
+            })
+            yield {"event": "message", "data": html_fragment}
+
+            mqtt_client.update_queue.task_done()
+            raw_update = None  # Zurücksetzen nach erfolgreicher Verarbeitung
+
+        except asyncio.TimeoutError:
+            yield {"event": "keep-alive", "data": "mqtt_dashboard_keep_alive"}
+        except asyncio.CancelledError:
+            print("MQTT Dashboard SSE connection closed by client.")
+            break  # Wichtig, um die Schleife zu beenden
+        except Exception as e:
+            print(f"Error in MQTT Dashboard SSE event_generator: {e}")
+            await asyncio.sleep(1)  # Kurze Pause vor dem nächsten Versuch
+        finally:
+            # Stellen Sie sicher, dass task_done aufgerufen wird, wenn ein Element erfolgreich
+            # aus der Queue geholt wurde, aber während der Verarbeitung ein Fehler auftrat.
+            if raw_update is not None:  # pragma: no cover
+                # Dies wird erreicht, wenn get() erfolgreich war, aber später ein Fehler auftrat
+                # bevor task_done() im try-Block erreicht wurde.
+                try:
                     mqtt_client.update_queue.task_done()
+                except ValueError:  # Falls task_done schon gerufen wurde oder nicht nötig
+                    pass
+
+
+# --- SSE ENDPOINT FÜR MQTT DASHBOARD ---
+@app.get("/events/mqtt-updates")
+async def mqtt_dashboard_sse_endpoint(request: Request):
+    """SSE endpoint for MQTT data updates for the dashboard."""
+    return EventSourceResponse(mqtt_dashboard_event_generator(request))
+
+# --- SSE ENDPOINT FÜR SETTINGS LIVE-UPDATES ---
+
+
+@app.get("/sse")
+async def settings_sse_stream(request: Request):
+    """
+    Generiert SSE-Events spezifisch für Einstellungs-Updates.
+    Liest von mqtt_client.update_queue.
+    """
+    # Variablen zur Vermeidung doppelter Verarbeitung durch diesen spezifischen Generator
+    last_update_type_settings = None
+    last_update_topic_settings = None
+    last_update_payload_settings = None
+
+    async def event_generator():
+        nonlocal last_update_type_settings, last_update_topic_settings, last_update_payload_settings
+        while True:
+            if await request.is_disconnected():
+                print("Client disconnected from Settings SSE")
+                break
+
+            raw_update = None
+            try:
+                # Timeout für Keep-Alive
+                raw_update = await asyncio.wait_for(mqtt_client.update_queue.get(), timeout=30)
+
+                update_type = raw_update.get("type")
+                update_topic = raw_update.get("topic")
+                update_payload = raw_update.get("payload")
+
+                # Verhindere doppelte Verarbeitung derselben Nachricht durch diesen Handler
+                if (update_type == last_update_type_settings and
+                    update_topic == last_update_topic_settings and
+                        update_payload == last_update_payload_settings):
+                    mqtt_client.update_queue.task_done()
+                    raw_update = None
                     continue
 
-                last_update_type = update_type
-                last_update_topic = update_topic
-                last_update_payload = update_payload
+                last_update_type_settings = update_type
+                last_update_topic_settings = update_topic
+                last_update_payload_settings = update_payload
 
-                if update_type == "update":
-                    if update_topic == "send_settings" and update_payload == "updated":
-                        print(
-                            "SSE: 'send_settings' Update erkannt. Rendere Einstellungs-Komponente.")
-                        with mqtt_client.latest_messages_lock:
-                            current_settings_data = mqtt_client.latest_messages.copy()
+                # Dieser Handler ist spezifisch für Settings-Updates
+                if update_type == "update" and update_topic == "send_settings" and update_payload == "updated":
+                    print(
+                        "Settings SSE: 'send_settings' Update erkannt. Rendere Einstellungs-Komponente.")
+                    with mqtt_client.latest_messages_lock:
+                        current_settings_data = mqtt_client.latest_messages.copy()
 
-                        # Wichtig: Das 'request'-Objekt für das Template-Rendering
-                        # muss hier korrekt übergeben werden. Da wir es im sse_stream
-                        # haben, können wir es verwenden.
-                        html_content = templates.get_template("components/settings_display.html").render({
-                            "request": request,
-                            "settings_data": current_settings_data
-                        })
-                        yield {"event": "settings_update", "data": html_content}
-                    # ... (ggf. andere SSE-Events)
+                    html_content = templates.get_template("components/settings_display.html").render({
+                        "request": request,
+                        "settings_data": current_settings_data
+                    })
+                    yield {"event": "settings_update", "data": html_content}
 
                 mqtt_client.update_queue.task_done()
+                raw_update = None
 
             except asyncio.TimeoutError:
-                yield {"event": "keep-alive", "data": ""}
+                yield {"event": "keep-alive", "data": "settings_keep_alive"}
             except asyncio.CancelledError:
-                print("SSE-Verbindung vom Client geschlossen.")
+                print("Settings SSE connection closed by client.")
                 break
             except Exception as e:
-                print(f"Fehler im SSE event_generator: {e}")
+                print(f"Fehler im Settings SSE event_generator: {e}")
                 await asyncio.sleep(1)
-
+            finally:
+                if raw_update is not None:  # pragma: no cover
+                    try:
+                        mqtt_client.update_queue.task_done()
+                    except ValueError:
+                        pass
+    # Die event_generator Funktion ist hier definiert, aber die Route gibt sie zurück
     return EventSourceResponse(event_generator())
-# Fügen Sie hier ggf. weitere Routen oder statische Datei-Mounts hinzu
-# from fastapi.staticfiles import StaticFiles
+
+# --- New SSE Generator for Index Page (New Messages) ---
+
+
+async def new_message_event_generator(request: Request):
+    """
+    Generates SSE-Events for new MQTT messages for the index page.
+    Liest von mqtt_client.update_queue.
+    """
+    # Variables to prevent processing the same update multiple times by this specific generator
+    last_processed_update_content_for_index = None
+
+    while True:
+        if await request.is_disconnected():
+            print("Client disconnected from New Messages SSE")
+            break
+
+        raw_update = None
+        try:
+            # Timeout for Keep-Alive
+            print("New Messages SSE: Waiting for item from queue...")
+            raw_update = await asyncio.wait_for(mqtt_client.update_queue.get(), timeout=30)
+            print(f"New Messages SSE: Received item from queue: {raw_update}")
+
+            update_type = raw_update.get("type")
+            update_topic = raw_update.get("topic")
+            update_payload = raw_update.get("payload")
+
+            current_update_content = (
+                update_type, update_topic, update_payload)
+
+            # Prevent processing the same message multiple times by this specific handler
+            if last_processed_update_content_for_index is not None and current_update_content == last_processed_update_content_for_index:
+                # print(f"New Messages SSE: Skipping duplicate update: {raw_update}") # Optional: kann ausführlich sein
+                mqtt_client.update_queue.task_done()
+                raw_update = None
+                continue
+
+            last_processed_update_content_for_index = current_update_content
+
+            # We only care about 'update' type messages for the index stream
+            # You might want to filter topics here if needed
+            if update_type == "update":
+                print(
+                    f"New Messages SSE: Processing update from Queue: {raw_update}")
+                # Format the message as an <li> element
+                # Escape topic and payload to prevent XSS if it contains HTML/JS
+                escaped_topic = html.escape(str(update_topic))
+                escaped_payload = html.escape(str(update_payload))
+                # Store the formatted HTML fragment
+                latest_message_html_fragment = f"<li><strong>{escaped_topic}:</strong> {escaped_payload}</li>"
+                # Send a minimal event to trigger the hx-get on the client
+                # Data payload is not used for the swap in this approach
+                yield {"event": "new_message", "data": ""}
+            else:
+                # Log skipped types
+                # Log skipped types
+                print(
+                    f"New Messages SSE: Skipping update with type '{update_type}'")
+
+            # Ensure task_done is called for any item retrieved from the queue
+            mqtt_client.update_queue.task_done()
+            raw_update = None  # Reset raw_update after processing
+
+        except asyncio.TimeoutError:
+            yield {"event": "keep-alive", "data": "new_messages_keep_alive"}
+        except asyncio.CancelledError:
+            print("New Messages SSE connection closed by client.")
+            break  # Wichtig, um die Schleife zu beenden
+        except Exception as e:
+            print(f"Error in New Messages SSE event_generator: {e}")
+            await asyncio.sleep(1)  # Kurze Pause vor dem nächsten Versuch
+        finally:
+            # Stellen Sie sicher, dass task_done aufgerufen wird, wenn ein Element erfolgreich
+            # aus der Queue geholt wurde, aber während der Verarbeitung ein Fehler auftrat.
+            if raw_update is not None:  # pragma: no cover
+                # Dies wird erreicht, wenn get() erfolgreich war, aber später ein Fehler auftrat
+                # bevor task_done() im try-Block erreicht wurde.
+                try:
+                    mqtt_client.update_queue.task_done()
+                except ValueError:  # Falls task_done schon gerufen wurde oder nicht nötig
+                    pass
+# --- New Endpoint to return the latest message HTML fragment ---
+
+
+@app.get("/htmx/get-latest-message-html", response_class=HTMLResponse)
+async def get_latest_message_html():
+    """Returns the HTML fragment for the single latest message."""
+    # Return the stored HTML fragment
+    return HTMLResponse(content=latest_message_html_fragment)
+
+# --- New SSE Endpoint for Index Page ---
+
+
+@app.get("/events/new-messages")
+async def new_messages_sse_endpoint(request: Request):
+    """SSE endpoint for new MQTT message updates for the index page."""
+    return EventSourceResponse(new_message_event_generator(request))
+
+# --- DEBUG ROUTE FÜR MQTT HTML FRAGMENT ---
+
+
+@app.get("/debug/mqtt-html", response_class=HTMLResponse)
+async def debug_mqtt_html_fragment(request: Request):
+    """Renders and returns the raw MQTT table HTML fragment for debugging."""
+    with mqtt_client.latest_messages_lock:
+        current_mqtt_data = mqtt_client.latest_messages.copy()
+    return templates.TemplateResponse(
+        "components/mqtt_table.html",
+        {"request": request, "mqtt_data": current_mqtt_data}
+    )
+
+# Statische Dateien (CSS, JS, Bilder etc.)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")

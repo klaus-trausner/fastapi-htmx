@@ -1,23 +1,55 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Willkommen!</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
-    <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
-</head>
-<body>
-    <div class="container">
-        <h1>{{ welcome_message }}</h1>
-        <p>Dies ist eine einfache Webseite, die mit FastAPI, HTMX und Jinja2 erstellt wurde.</p>
+{% extends "base.html" %}
 
-        <div id="htmx-content">
-            Klicke auf den Button, um eine Nachricht mit HTMX zu laden:
-        </div>
-        <button hx-get="/htmx-message" hx-target="#htmx-content" hx-swap="innerHTML" class="btn btn-primary mt-2">
-            Nachricht laden
-        </button>
+{% block title %}FastAPI HTMX MQTT Example{% endblock %}
+
+{% block head_extra %}
+    <style>
+        /* Stile spezifisch für index.html oder Überschreibungen */
+         
+        #mqtt-messages ul { /* Stile für die Nachrichtenliste */
+            list-style-type: none;
+            padding: 0;
+        }
+        #mqtt-messages li { /* Stile für einzelne Nachrichten-Listenelemente */
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+        }
+        #mqtt-messages li:last-child { /* Kein unterer Rand für das letzte Element */
+            border-bottom: none;
+        }
+    </style>
+
+    <script>
+        // Add client-side logging for HTMX SSE events
+        document.addEventListener('htmx:sseOpen', function(event) {
+            console.log('HTMX SSE: Connection opened', event.detail);
+        });
+
+        document.addEventListener('htmx:sseMessage', function(event) {
+            console.log('HTMX SSE: Message received', event.detail);
+            // event.detail.event is the SSE event type (e.g., 'new_message')
+            // event.detail.data is the data payload (e.g., '<li>...</li>')
+        });
+        document.addEventListener('htmx:afterSwap', function(event) {
+            console.log('HTMX: After swap', event.detail);
+        });
+    </script>
+{% endblock %}
+
+{% block content %}
+    <h1>MQTT Live Updates</h1>
+
+    <div id="mqtt-messages">
+        <h2>Latest Messages:</h2>
+        <ul
+            hx-ext="sse" {# Enable SSE extension for this element #}
+            sse-connect="/events/new-messages" {# Connect to the new SSE endpoint for new messages #}
+            hx-trigger="sse:new_message" {# Trigger hx-get on 'new_message' SSE event #}
+            hx-get="/htmx/get-latest-message-html" {# Fetch the latest message HTML #}
+            hx-target="this" {# Explicitly target this element for the swap #}
+            {# Removed sse-events, hx-swap, and hx-trigger as sse-swap handles the event and swap #}
+        >
+            <!-- Messages will be inserted here by SSE -->
+        </ul>
     </div>
-</body>
-</html>
+{% endblock %}
