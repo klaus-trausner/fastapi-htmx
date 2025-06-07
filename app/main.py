@@ -1,9 +1,10 @@
 import asyncio
 from fastapi import FastAPI, Request, HTTPException, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import html  # Importiere das html Modul für escaping
+import json
 from sse_starlette.sse import EventSourceResponse
 
 from app import mqtt_client  # Ihre mqtt_client.py Datei
@@ -15,16 +16,31 @@ latest_message_html_fragment = ""
 
 # Stellen Sie sicher, dass der Pfad zu Ihren Templates korrekt ist
 templates = Jinja2Templates(directory="app/templates")
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # MQTT Client starten
 
 
 @app.on_event("startup")
 async def startup_event():
-    mqtt_client.app_event_loop = asyncio.get_running_loop()
-    print("Starting MQTT client...")
-    mqtt_client.start_mqtt_client()
-    print("FastAPI App gestartet und MQTT Client initialisiert.")
+    try:
+        mqtt_client.app_event_loop = asyncio.get_running_loop()
+        print("Starting MQTT client...")
+        mqtt_client.start_mqtt_client()
+        print("MQTT Client gestartet")
+        
+        # Warte kurz, damit die Verbindung hergestellt werden kann
+        await asyncio.sleep(1)
+        
+        # Prüfe, ob die Verbindung erfolgreich war
+        if mqtt_client.client.is_connected():
+            print("MQTT Client erfolgreich verbunden")
+        else:
+            print("MQTT Client ist nicht verbunden!")
+            raise Exception("MQTT Client konnte nicht verbunden werden")
+    except Exception as e:
+        print(f"Fehler beim Starten des MQTT Clients: {e}")
+        raise
 
 
 @app.on_event("shutdown")
@@ -37,13 +53,7 @@ def shutdown_event():
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    # Diese Route ist nur ein Beispiel, passen Sie sie an Ihre Bedürfnisse an
-    # Für die Index-Seite könnten Sie eine Auswahl der neuesten Nachrichten anzeigen
-    # oder einfach eine Willkommensseite.
-    # Hier verwenden wir latest_messages als Beispiel, wie im Original.
-    with mqtt_client.latest_messages_lock:
-        current_data = mqtt_client.latest_messages.copy()
-    return templates.TemplateResponse("index.html", {"request": request, "latest_messages": current_data})
+    return templates.TemplateResponse("index.html", {"request": request, "mqtt_client": mqtt_client})
 
 # --- SETTINGS SEITE (GET) ---
 
@@ -291,60 +301,52 @@ async def new_message_event_generator(request: Request):
             update_type = raw_update.get("type")
             update_topic = raw_update.get("topic")
             update_payload = raw_update.get("payload")
-
-            current_update_content = (
-                update_type, update_topic, update_payload)
-
-            # Prevent processing the same message multiple times by this specific handler
-            if last_processed_update_content_for_index is not None and current_update_content == last_processed_update_content_for_index:
-                # print(f"New Messages SSE: Skipping duplicate update: {raw_update}") # Optional: kann ausführlich sein
+            current_update_content = (update_type, update_topic, update_payload)
+            
+            if last_processed_update_content_for_index == current_update_content:
                 mqtt_client.update_queue.task_done()
-                raw_update = None
                 continue
-
+                
             last_processed_update_content_for_index = current_update_content
-
-            # We only care about 'update' type messages for the index stream
-            # You might want to filter topics here if needed
+            
             if update_type == "update":
-                print(
-                    f"New Messages SSE: Processing update from Queue: {raw_update}")
-                # Format the message as an <li> element
-                # Escape topic and payload to prevent XSS if it contains HTML/JS
                 escaped_topic = html.escape(str(update_topic))
                 escaped_payload = html.escape(str(update_payload))
-                # Store the formatted HTML fragment
-                latest_message_html_fragment = f"<li><strong>{escaped_topic}:</strong> {escaped_payload}</li>"
-                # Send a minimal event to trigger the hx-get on the client
-                # Data payload is not used for the swap in this approach
-                yield {"event": "new_message", "data": ""}
+                
+                # Erstelle die Liste-Elemente
+                list_items = []
+                for topic, payload in mqtt_client.latest_messages.items():
+                    escaped_topic = html.escape(str(topic))
+                    escaped_payload = html.escape(str(payload))
+                    list_items.append(f"<li><strong>{escaped_topic}:</strong> {escaped_payload}</li>")
+                
+                # Sende die aktualisierten Nachrichten als JSON
+                with mqtt_client.latest_messages_lock:
+                    current_messages = mqtt_client.latest_messages.copy()
+                # Sortiere die Nachrichten nach Topic für konsistente Anzeige
+                sorted_messages = dict(sorted(current_messages.items()))
+                # Send JSON data
+                yield {"data": json.dumps(sorted_messages)}
             else:
-                # Log skipped types
-                # Log skipped types
-                print(
-                    f"New Messages SSE: Skipping update with type '{update_type}'")
-
-            # Ensure task_done is called for any item retrieved from the queue
+                print(f"New Messages SSE: Skipping update with type '{update_type}'")
+                continue
+                
             mqtt_client.update_queue.task_done()
-            raw_update = None  # Reset raw_update after processing
-
+            raw_update = None
+            
         except asyncio.TimeoutError:
             yield {"event": "keep-alive", "data": "new_messages_keep_alive"}
         except asyncio.CancelledError:
             print("New Messages SSE connection closed by client.")
-            break  # Wichtig, um die Schleife zu beenden
+            break
         except Exception as e:
             print(f"Error in New Messages SSE event_generator: {e}")
-            await asyncio.sleep(1)  # Kurze Pause vor dem nächsten Versuch
+            await asyncio.sleep(1)
         finally:
-            # Stellen Sie sicher, dass task_done aufgerufen wird, wenn ein Element erfolgreich
-            # aus der Queue geholt wurde, aber während der Verarbeitung ein Fehler auftrat.
-            if raw_update is not None:  # pragma: no cover
-                # Dies wird erreicht, wenn get() erfolgreich war, aber später ein Fehler auftrat
-                # bevor task_done() im try-Block erreicht wurde.
+            if raw_update is not None:
                 try:
                     mqtt_client.update_queue.task_done()
-                except ValueError:  # Falls task_done schon gerufen wurde oder nicht nötig
+                except ValueError:
                     pass
 # --- New Endpoint to return the latest message HTML fragment ---
 
@@ -363,18 +365,11 @@ async def new_messages_sse_endpoint(request: Request):
     """SSE endpoint for new MQTT message updates for the index page."""
     return EventSourceResponse(new_message_event_generator(request))
 
-# --- DEBUG ROUTE FÜR MQTT HTML FRAGMENT ---
-
-
-@app.get("/debug/mqtt-html", response_class=HTMLResponse)
-async def debug_mqtt_html_fragment(request: Request):
-    """Renders and returns the raw MQTT table HTML fragment for debugging."""
-    with mqtt_client.latest_messages_lock:
-        current_mqtt_data = mqtt_client.latest_messages.copy()
-    return templates.TemplateResponse(
-        "components/mqtt_table.html",
-        {"request": request, "mqtt_data": current_mqtt_data}
-    )
-
 # Statische Dateien (CSS, JS, Bilder etc.)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+# Neue Route für das aktuelle MQTT-HTML-Fragment
+@app.get("/htmx/get-latest-message-html", response_class=HTMLResponse)
+async def get_latest_message_html():
+    """Gibt das aktuelle MQTT-HTML-Fragment zurück."""
+    return HTMLResponse(content=latest_message_html_fragment)

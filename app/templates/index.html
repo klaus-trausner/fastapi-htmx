@@ -41,15 +41,65 @@
 
     <div id="mqtt-messages">
         <h2>Latest Messages:</h2>
-        <ul
-            hx-ext="sse" {# Enable SSE extension for this element #}
-            sse-connect="/events/new-messages" {# Connect to the new SSE endpoint for new messages #}
-            hx-trigger="sse:new_message" {# Trigger hx-get on 'new_message' SSE event #}
-            hx-get="/htmx/get-latest-message-html" {# Fetch the latest message HTML #}
-            hx-target="this" {# Explicitly target this element for the swap #}
-            {# Removed sse-events, hx-swap, and hx-trigger as sse-swap handles the event and swap #}
-        >
-            <!-- Messages will be inserted here by SSE -->
-        </ul>
+        <div id="messages-container">
+            <div class="mqtt-messages-wrapper">
+                <ul class="mqtt-messages">
+                    {% for topic, payload in mqtt_client.latest_messages.items() %}
+                        <li><strong>{{ topic }}:</strong> {{ payload }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
     </div>
+
+    <script>
+        // Handle SSE messages
+        function updateMessages(data) {
+            const container = document.getElementById('messages-container');
+            if (!container) return;
+
+            // Parse the JSON data
+            const messages = JSON.parse(data);
+            
+            // Create new list
+            const wrapper = document.createElement('div');
+            wrapper.className = 'mqtt-messages-wrapper';
+            
+            const ul = document.createElement('ul');
+            ul.className = 'mqtt-messages';
+            
+            // Sort and add messages
+            Object.entries(messages).sort(([a], [b]) => a.localeCompare(b)).forEach(([topic, payload]) => {
+                const li = document.createElement('li');
+                li.innerHTML = `<strong>${topic}:</strong> ${payload}`;
+                ul.appendChild(li);
+            });
+            
+            wrapper.appendChild(ul);
+            container.innerHTML = '';
+            container.appendChild(wrapper);
+        }
+
+        // Create SSE connection
+        const eventSource = new EventSource('/events/new-messages');
+        
+        eventSource.onmessage = function(event) {
+            updateMessages(event.data);
+        };
+
+        eventSource.onerror = function() {
+            console.error('SSE connection error');
+            eventSource.close();
+        };
+
+        // Initial update
+        const initialMessages = {
+            {% for topic, payload in mqtt_client.latest_messages.items() %}
+            '{{ topic }}': '{{ payload }}'{% if not loop.last %},
+            {% endif %}{% endfor %}
+        };
+        updateMessages(JSON.stringify(initialMessages));
+
+
+    </script>
 {% endblock %}
