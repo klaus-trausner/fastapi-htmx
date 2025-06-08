@@ -7,11 +7,13 @@
     </thead>
     <tbody>
         {% if mqtt_data %}
-            {% for topic, value in mqtt_data.items()|sort %}
-            <tr>
-                <td>{{ topic }}</td>
-                <td>{{ value }}</td>
-            </tr>
+            {% for topic, message in mqtt_data.items()|sort %}
+                {% if not topic.startswith('setting_') and topic != 'send_settings' and topic != 'send_settings_payload' %}
+                <tr>
+                    <td>{{ topic }}</td>
+                    <td>{{ message }}</td>
+                </tr>
+                {% endif %}
             {% endfor %}
         {% else %}
             <tr>

@@ -31,6 +31,88 @@ MQTT_TOPICS = [
 
 # Globaler Speicher für die letzten Nachrichten und asyncio Queue
 latest_messages = {}
+
+# Lock für Thread-sichere Updates
+latest_messages_lock = asyncio.Lock()
+
+# Event für neue Nachrichten
+new_message_event = asyncio.Event()
+
+# Update Queue für neue Nachrichten
+update_queue = asyncio.Queue()
+
+# MQTT Client Instanz
+client = mqtt.Client()
+
+# Verbindung zum Broker herstellen
+client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+
+# Callback für neue Nachrichten
+def on_message(client, userdata, msg):
+    """Wird aufgerufen, wenn eine neue MQTT-Nachricht empfangen wird."""
+    try:
+        topic = msg.topic
+        payload = msg.payload.decode()
+        
+        # Speichere die Nachricht
+        with latest_messages_lock:
+            latest_messages[topic] = payload
+            
+        # Signalisiere neue Nachricht
+        new_message_event.set()
+        
+        # Leere die Queue
+        while not update_queue.empty():
+            update_queue.get_nowait()
+            update_queue.task_done()
+            
+        # Füge neue Nachricht zur Queue hinzu
+        update_queue.put_nowait({"type": "update", "topic": topic, "payload": payload})
+        
+        print(f"MQTT_CLIENT: Nachricht empfangen auf Topic '{topic}': {payload}")
+        
+    except Exception as e:
+        print(f"MQTT_CLIENT: Fehler beim Verarbeiten der Nachricht: {e}")
+
+# MQTT Client initialisieren
+client.on_message = on_message
+
+async def connect():
+    """Verbindung zum MQTT Broker herstellen."""
+    try:
+        client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT)
+        client.subscribe([(topic, 0) for topic in MQTT_TOPICS])
+        client.loop_start()
+        print("MQTT_CLIENT: Verbunden mit MQTT Broker")
+        return True
+    except Exception as e:
+        print(f"MQTT_CLIENT: Verbindung fehlgeschlagen: {e}")
+        return False
+
+async def disconnect():
+    """Verbindung zum MQTT Broker trennen."""
+    try:
+        client.loop_stop()
+        client.disconnect()
+        print("MQTT_CLIENT: Verbindung getrennt")
+        return True
+    except Exception as e:
+        print(f"MQTT_CLIENT: Fehler beim Trennen der Verbindung: {e}")
+        return False
+
+async def send_message(topic: str, message: str):
+    """Sendet eine MQTT-Nachricht."""
+    try:
+        client.publish(topic, message)
+        print(f"MQTT_CLIENT: Nachricht gesendet auf Topic '{topic}': {message}")
+        return True
+    except Exception as e:
+        print(f"MQTT_CLIENT: Fehler beim Senden der Nachricht: {e}")
+        return False
+
+async def is_connected():
+    """Gibt den Verbindungsstatus zurück."""
+    return client.is_connected()
 latest_messages_lock = threading.Lock()  # Lock für latest_messages
 update_queue = asyncio.Queue()
 app_event_loop = None  # Wird von main.py gesetzt

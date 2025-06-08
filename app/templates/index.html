@@ -4,102 +4,83 @@
 
 {% block head_extra %}
     <style>
-        /* Stile spezifisch für index.html oder Überschreibungen */
-         
-        #mqtt-messages ul { /* Stile für die Nachrichtenliste */
-            list-style-type: none;
-            padding: 0;
+        .esp32-controls {
+            margin: 20px 0;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
         }
-        #mqtt-messages li { /* Stile für einzelne Nachrichten-Listenelemente */
-            padding: 8px;
-            border-bottom: 1px solid #eee;
+        .esp32-controls h2 {
+            margin-top: 0;
+            color: #007bff;
         }
-        #mqtt-messages li:last-child { /* Kein unterer Rand für das letzte Element */
-            border-bottom: none;
+        .esp32-button {
+            margin: 5px;
+            padding: 8px 16px;
+        }
+        .esp32-status {
+            margin: 15px 0;
+            padding: 10px;
+            background-color: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+        }
+        .esp32-status p {
+            margin: 0;
+            color: #6c757d;
         }
     </style>
-
-    <script>
-        // Add client-side logging for HTMX SSE events
-        document.addEventListener('htmx:sseOpen', function(event) {
-            console.log('HTMX SSE: Connection opened', event.detail);
-        });
-
-        document.addEventListener('htmx:sseMessage', function(event) {
-            console.log('HTMX SSE: Message received', event.detail);
-            // event.detail.event is the SSE event type (e.g., 'new_message')
-            // event.detail.data is the data payload (e.g., '<li>...</li>')
-        });
-        document.addEventListener('htmx:afterSwap', function(event) {
-            console.log('HTMX: After swap', event.detail);
-        });
-    </script>
 {% endblock %}
 
 {% block content %}
-    <h1>MQTT Live Updates</h1>
+    <div class="container">
+        <h1>ESP32 Steuerung</h1>
+        
+        <div class="esp32-controls">
+            <h2>Status Anfragen</h2>
+            <button class="esp32-button" hx-post="/mqtt/send/status/isOnline" hx-swap="none">Status Online</button>
+            <button class="esp32-button" hx-post="/mqtt/send/status/pumpe" hx-swap="none">Status Pumpe</button>
+            <button class="esp32-button" hx-post="/mqtt/send/status/ip" hx-swap="none">Status IP</button>
+        </div>
 
-    <div id="mqtt-messages">
-        <h2>Latest Messages:</h2>
-        <div id="messages-container">
-            <div class="mqtt-messages-wrapper">
-                <ul class="mqtt-messages">
-                    {% for topic, payload in mqtt_client.latest_messages.items() %}
-                        <li><strong>{{ topic }}:</strong> {{ payload }}</li>
-                    {% endfor %}
-                </ul>
-            </div>
+        <div class="esp32-controls">
+            <h2>Aktionen</h2>
+            <button class="esp32-button" hx-post="/mqtt/send/action/reboot" hx-swap="none">Reboot</button>
+            <button class="esp32-button" hx-post="/mqtt/send/action/messung" hx-swap="none">Messung</button>
+            <button class="esp32-button" hx-post="/mqtt/send/action/manuell=false" hx-swap="none">Manuell Aus</button>
+            <button class="esp32-button" hx-post="/mqtt/send/action/manuell=true" hx-swap="none">Manuell An</button>
+            <button class="esp32-button" hx-post="/mqtt/send/action/tuerZu" hx-swap="none">Tür zu</button>
+            <button class="esp32-button" hx-post="/mqtt/send/action/tuerAuf" hx-swap="none">Tür auf</button>
+        </div>
+
+        <div class="esp32-controls">
+            <h2>ESP32 LED</h2>
+            <button class="esp32-button" hx-post="/mqtt/send/esp32/output/on" hx-swap="none">LED An</button>
+            <button class="esp32-button" hx-post="/mqtt/send/esp32/output/off" hx-swap="none">LED Aus</button>
+        </div>
+
+        <div class="esp32-status" id="esp32-status">
+            <p>Status: <span id="status-message">Lädt...</span></p>
         </div>
     </div>
-
     <script>
-        // Handle SSE messages
-        function updateMessages(data) {
-            const container = document.getElementById('messages-container');
-            if (!container) return;
-
-            // Parse the JSON data
-            const messages = JSON.parse(data);
-            
-            // Create new list
-            const wrapper = document.createElement('div');
-            wrapper.className = 'mqtt-messages-wrapper';
-            
-            const ul = document.createElement('ul');
-            ul.className = 'mqtt-messages';
-            
-            // Sort and add messages
-            Object.entries(messages).sort(([a], [b]) => a.localeCompare(b)).forEach(([topic, payload]) => {
-                const li = document.createElement('li');
-                li.innerHTML = `<strong>${topic}:</strong> ${payload}`;
-                ul.appendChild(li);
-            });
-            
-            wrapper.appendChild(ul);
-            container.innerHTML = '';
-            container.appendChild(wrapper);
+        // MQTT Status-Update Funktion
+        async function updateEsp32Status() {
+            try {
+                const response = await fetch('/mqtt/status');
+                const status = await response.json();
+                document.getElementById('status-message').textContent = status.message || 'Keine Statusmeldung verfügbar';
+            } catch (error) {
+                console.error('Fehler beim Aktualisieren des ESP32-Status:', error);
+                document.getElementById('status-message').textContent = 'Status konnte nicht geladen werden';
+            }
         }
 
-        // Create SSE connection
-        const eventSource = new EventSource('/events/new-messages');
+        // Initialer Status-Update
+        updateEsp32Status();
         
-        eventSource.onmessage = function(event) {
-            updateMessages(event.data);
-        };
-
-        eventSource.onerror = function() {
-            console.error('SSE connection error');
-            eventSource.close();
-        };
-
-        // Initial update
-        const initialMessages = {
-            {% for topic, payload in mqtt_client.latest_messages.items() %}
-            '{{ topic }}': '{{ payload }}'{% if not loop.last %},
-            {% endif %}{% endfor %}
-        };
-        updateMessages(JSON.stringify(initialMessages));
-
-
+        // Periodischer Status-Update (alle 5 Sekunden)
+        setInterval(updateEsp32Status, 5000);
     </script>
 {% endblock %}
